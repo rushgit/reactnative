@@ -14,7 +14,7 @@ rn分为三大模块,java层、js层和bridge,java和js通过bridge实现通信,
 
 ![](pic/2.png)<br>
 
-先来看rn初始化的过程, java => js<br>
+## 先来看rn初始化的过程, java => js
 
 ### 初始化bridge
 
@@ -245,7 +245,7 @@ void Bridge::setGlobalVariable(const std::string& propName, const std::string& j
 ```
 
 #### 12. JSCExecutor.cpp
-调用JavaScriptCore将prop设置到js的全局变量中, 到这里就完成了将native module配置表写入js全局变量__fbBatchedBridgeConfig中
+调用JavaScriptCore将prop设置到js的全局变量中, 到这里就完成了将native module配置表写入js全局变量__fbBatchedBridgeConfig中。
 ```java
 void JSCExecutor::setGlobalVariable(const std::string& propName, const std::string& jsonValue) {
   auto globalObject = JSContextGetGlobalObject(m_context);
@@ -256,4 +256,39 @@ void JSCExecutor::setGlobalVariable(const std::string& propName, const std::stri
 
   JSObjectSetProperty(m_context, globalObject, jsPropertyName, valueToInject, 0, NULL);
 }
+```
+
+### 加载js bundle
+现在加到第4步, 初始化好CatalystInstance后,下一步是加载js bundle,过程见下图<br>
+![](pic/4.jpeg)<br>
+
+#### 13. runJSBundle
+同样在js线程中执行<br>
+```java
+  catalystInstance.getReactQueueConfiguration().getJSQueueThread().callOnQueue(
+    new Callable<Void>() {
+      @Override
+      public Void call() {
+        // RUN_JS_BUNDLE_END is in JSCExecutor.cpp
+        Systrace.beginSection(Systrace.TRACE_TAG_REACT_JAVA_BRIDGE, "runJSBundle");
+        try {
+          catalystInstance.runJSBundle();
+        } finally {
+          // This will actually finish when `JSCExecutor#loadApplicationScript()` finishes
+          Systrace.endSection(Systrace.TRACE_TAG_REACT_JAVA_BRIDGE);
+        }
+        return null;
+      }
+    }).get();
+
+  public void runJSBundle() {
+    ......
+    try {
+      mJSBundleLoader.loadScript(mBridge);
+    } catch (JSExecutionException e) {
+      mNativeModuleCallExceptionHandler.handleException(e);
+    } finally {
+    }
+    mJSBundleHasLoaded = true;
+  }
 ```
