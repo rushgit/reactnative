@@ -262,7 +262,7 @@ void JSCExecutor::setGlobalVariable(const std::string& propName, const std::stri
 现在加到第4步, 初始化好CatalystInstance后,下一步是加载js bundle,过程见下图<br>
 ![](pic/4.jpeg)<br>
 
-#### 13. runJSBundle
+#### 14. runJSBundle
 同样在js线程中执行<br>
 ```java
   catalystInstance.getReactQueueConfiguration().getJSQueueThread().callOnQueue(
@@ -291,4 +291,94 @@ void JSCExecutor::setGlobalVariable(const std::string& propName, const std::stri
     }
     mJSBundleHasLoaded = true;
   }
+```
+#### 15. JSBundleLoader.loadScript()
+JSBundleLoader提供了3种加载js bundle的方法:<br>
+1. 从assets中加载<br>
+2. 从指定的file中加载<br>
+3. 从网络中加载<br>
+这里我们只关注从文件中加载的方式,其它2种方式本质上也一样。具体加载过程出C层实现<br>
+```java
+  public static JSBundleLoader createFileLoader(
+      final Context context,
+      final String fileName) {
+    return new JSBundleLoader() {
+      @Override
+      public void loadScript(ReactBridge bridge) {
+        if (fileName.startsWith("assets://")) {
+          bridge.loadScriptFromAssets(context.getAssets(), fileName.replaceFirst("assets://", ""));
+        } else {
+          bridge.loadScriptFromFile(fileName, "file://" + fileName);
+        }
+      }
+    ......
+    };
+  }
+```
+
+#### 16. OnLoad.cpp loadScriptFromFile()
+和setGlobalVariable一样, 派发到Bridge.cpp中执行
+```java
+static void loadScriptFromFile(JNIEnv* env, jobject obj, jstring fileName, jstring sourceURL) {
+  .......
+  env->CallStaticVoidMethod(markerClass, gLogMarkerMethod, env->NewStringUTF("loadScriptFromFile_read"));
+  loadApplicationScript(bridge, script, fromJString(env, sourceURL));
+  if (env->ExceptionCheck()) {
+    return;
+  }
+  env->CallStaticVoidMethod(markerClass, gLogMarkerMethod, env->NewStringUTF("loadScriptFromFile_exec"));
+}
+```
+
+#### 17. OnLoad.cpp loadApplicationScript()
+```java
+static void loadApplicationScript(
+    const RefPtr<CountableBridge>& bridge,
+    const std::string& script,
+    const std::string& sourceUri) {
+  try {
+    bridge->loadApplicationScript(script, sourceUri);
+  } catch (...) {
+    translatePendingCppExceptionToJavaException();
+  }
+}
+```
+
+#### 18. Bridge.cpp loadApplicationScript()
+派发到JSCExecutor.cpp中
+```java
+void Bridge::loadApplicationScript(const std::string& script, const std::string& sourceURL) {
+  m_mainExecutor->loadApplicationScript(script, sourceURL);
+}
+```
+
+#### 19. JSCExecutor.cpp loadApplicationScript()
+调用JSCHelpers.cpp evaluateScript(),执行完后通过flush回调到java层。
+```java
+void JSCExecutor::loadApplicationScript(
+    const std::string& script,
+    const std::string& sourceURL) {
+  ......
+  evaluateScript(m_context, jsScript, jsSourceURL);
+  flush();
+  ReactMarker::logMarker("RUN_JS_BUNDLE_END");
+  ReactMarker::logMarker("CREATE_REACT_CONTEXT_END");
+}
+
+void JSCExecutor::flush() {
+  ......
+  std::string calls = m_flushedQueueObj->callAsFunction().toJSONString();
+  m_bridge->callNativeModules(*this, calls, true);
+}
+```
+
+#### 20. JSCHelpers.cpp evaluateScript()
+调用JavaScriptCore的evaluate方法,加载script。
+```java
+JSValueRef evaluateScript(JSContextRef context, JSStringRef script, JSStringRef source) {
+  JSValueRef exn, result;
+  result = JSEvaluateScript(context, script, NULL, source, 0, &exn);
+  ......
+  return result;
+}
 ```
